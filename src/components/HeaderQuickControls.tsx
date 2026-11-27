@@ -1,8 +1,9 @@
-import React, {useState} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 import {
   Check,
   Copy,
   Download,
+  ExternalLink,
   Monitor,
   Moon,
   Share,
@@ -25,17 +26,50 @@ export const HeaderQuickControls: React.FC<HeaderQuickControlsProps> = ({
   onChangeTheme,
   compactOnMobile = false,
 }) => {
-  const {isInstallable, isInstalled, isIOS, install} = usePWAInstall();
+  const {isInstallable, isInstalled, isIOS, isInIframe, install} =
+    usePWAInstall();
   const [guideOpen, setGuideOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [installing, setInstalling] = useState(false);
+
+  const autoInstallTabUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '/?install=1';
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('install', '1');
+      return u.toString();
+    } catch {
+      return '/?install=1';
+    }
+  }, []);
+
+  // When opened in a standalone top-level tab via ?install=1, clean URL & surface 1-click install modal
+  useEffect(() => {
+    if (typeof window === 'undefined' || isInstalled) return;
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('install') === '1') {
+        url.searchParams.delete('install');
+        window.history.replaceState({}, '', url.toString());
+        setGuideOpen(true);
+      }
+    } catch {
+      // ignore URL errors
+    }
+  }, [isInstalled]);
 
   const handleInstallClick = async () => {
     if (isInstallable) {
-      const accepted = await install();
-      if (!accepted) {
-        setGuideOpen(true);
+      setInstalling(true);
+      try {
+        const accepted = await install();
+        if (accepted) {
+          setGuideOpen(false);
+          return;
+        }
+      } finally {
+        setInstalling(false);
       }
-      return;
     }
     setGuideOpen(true);
   };
@@ -56,10 +90,11 @@ export const HeaderQuickControls: React.FC<HeaderQuickControlsProps> = ({
         {!isInstalled && (
           <button
             type="button"
+            disabled={installing}
             onClick={() => void handleInstallClick()}
             title="ติดตั้งแอปหรือสร้างทางลัดบนหน้าจอหลัก"
             aria-label="ติดตั้งแอปหรือสร้างทางลัดบนหน้าจอหลัก"
-            className={`inline-flex items-center gap-1.5 rounded-full bg-white/15 hover:bg-white/25 border border-white/30 text-white text-[11px] sm:text-xs font-medium backdrop-blur-xs transition-colors whitespace-nowrap shrink-0 ${
+            className={`inline-flex items-center gap-1.5 rounded-full bg-white/15 hover:bg-white/25 border border-white/30 text-white text-[11px] sm:text-xs font-medium backdrop-blur-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               compactOnMobile
                 ? 'p-1.5 sm:px-3.5 sm:py-1.5'
                 : 'px-2.5 py-1.5 sm:px-3.5 sm:py-1.5'
@@ -67,7 +102,7 @@ export const HeaderQuickControls: React.FC<HeaderQuickControlsProps> = ({
           >
             <Download className="w-3.5 h-3.5 shrink-0" />
             <span className={compactOnMobile ? 'hidden sm:inline' : ''}>
-              ติดตั้ง / ทางลัด
+              {installing ? 'กำลังติดตั้ง...' : 'ติดตั้ง / ทางลัด'}
             </span>
           </button>
         )}
@@ -158,16 +193,38 @@ export const HeaderQuickControls: React.FC<HeaderQuickControlsProps> = ({
             </div>
 
             <div className="p-4 sm:p-5 space-y-3.5 sm:space-y-4 text-xs overflow-y-auto">
-              {isInstallable && (
+              {isInstallable ? (
                 <button
                   type="button"
-                  onClick={() => void install()}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#0A4DA2] hover:bg-[#083F86] text-white font-semibold shadow-sm transition-colors"
+                  disabled={installing}
+                  onClick={() => void handleInstallClick()}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#0A4DA2] hover:bg-[#083F86] text-white text-sm font-semibold shadow-sm transition-colors cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  <span>ติดตั้งลงอุปกรณ์ทันที</span>
+                  <span>
+                    {installing
+                      ? 'กำลังเปิดหน้าต่างติดตั้ง...'
+                      : 'ติดตั้งแอปลงอุปกรณ์ทันที'}
+                  </span>
                 </button>
-              )}
+              ) : isInIframe && !isIOS ? (
+                <div className="rounded-xl border border-sky-200 dark:border-sky-800 bg-sky-50/90 dark:bg-sky-950/50 p-3.5 space-y-2.5">
+                  <p className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                    เบราว์เซอร์ไม่อนุญาตให้ติดตั้งแอปโดยตรงจากภายในกรอบแสดงตัวอย่าง
+                    กดปุ่มด้านล่างเพื่อเปิดในแท็บเต็มจอแล้วติดตั้งอัตโนมัติได้ทันที
+                  </p>
+                  <a
+                    href={autoInstallTabUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setGuideOpen(false)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#0A4DA2] hover:bg-[#083F86] text-white font-semibold shadow-sm transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    <span>เปิดแท็บเต็มจอเพื่อติดตั้งอัตโนมัติ</span>
+                  </a>
+                </div>
+              ) : null}
 
               <div className="space-y-3">
                 <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 p-3.5 space-y-1.5">
