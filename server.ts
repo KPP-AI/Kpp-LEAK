@@ -87,9 +87,222 @@ function verifySessionToken(
   }
 }
 
+interface ServerLeakRecord {
+  id: string;
+  [key: string]: unknown;
+}
+
+interface RealtimeBroadcastPayload {
+  action: 'upsert' | 'delete' | 'replace';
+  version: number;
+  leak?: ServerLeakRecord;
+  id?: string;
+  leaks?: ServerLeakRecord[];
+  sourceClientId?: string;
+  reason?: string;
+  silent?: boolean;
+  timestamp: string;
+}
+
+let serverLeaks: ServerLeakRecord[] = [];
+let serverVersion = 0;
+let serverUpdatedAt = new Date().toISOString();
+const sseClients = new Set<Response>();
+
+function broadcastLeakEvent(payload: RealtimeBroadcastPayload): void {
+  const serialized = `event: leak_sync\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(serialized);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
 async function startServer() {
   const app = express();
-  app.use(express.json({limit: '1mb'}));
+  app.use(express.json({limit: '15mb'}));
+
+  app.get('/api/realtime/stream', (req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    sseClients.add(res);
+    res.write(
+      `event: connected\ndata: ${JSON.stringify({
+        version: serverVersion,
+        updatedAt: serverUpdatedAt,
+      })}\n\n`
+    );
+
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        sseClients.delete(res);
+      }
+    }, 20000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
+    });
+  });
+
+  app.get('/api/leaks', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      version: serverVersion,
+      updatedAt: serverUpdatedAt,
+      leaks: serverLeaks,
+    });
+  });
+
+  app.post('/api/leaks/mutate', (req: Request, res: Response) => {
+    const body = req.body as {
+      action?: unknown;
+      leak?: unknown;
+      id?: unknown;
+      leaks?: unknown;
+      sourceClientId?: unknown;
+      reason?: unknown;
+      silent?: unknown;
+    };
+
+    const action = typeof body?.action === 'string' ? body.action : '';
+    const sourceClientId =
+      typeof body?.sourceClientId === 'string'
+        ? body.sourceClientId
+        : undefined;
+    const reason = typeof body?.reason === 'string' ? body.reason : undefined;
+    const silent = body?.silent === true;
+
+    if (action === 'seed_if_empty') {
+      if (
+        serverVersion === 0 &&
+        Array.isArray(body?.leaks) &&
+        body.leaks.length > 0
+      ) {
+        serverLeaks = body.leaks.filter(
+          (item): item is ServerLeakRecord =>
+            Boolean(item) &&
+            typeof item === 'object' &&
+            typeof (item as ServerLeakRecord).id === 'string'
+        );
+        serverVersion = 1;
+        serverUpdatedAt = new Date().toISOString();
+        broadcastLeakEvent({
+          action: 'replace',
+          version: serverVersion,
+          leaks: serverLeaks,
+          sourceClientId,
+          reason,
+          silent: true,
+          timestamp: serverUpdatedAt,
+        });
+      }
+      res.json({ok: true, version: serverVersion});
+      return;
+    }
+
+    if (action === 'upsert') {
+      const leak = body?.leak as ServerLeakRecord | undefined;
+      if (!leak || typeof leak !== 'object' || typeof leak.id !== 'string' || !leak.id.trim()) {
+        res.status(400).json({ok: false, error: 'Invalid leak payload'});
+        return;
+      }
+
+      const idx = serverLeaks.findIndex((item) => item.id === leak.id);
+      if (idx >= 0) {
+        serverLeaks = serverLeaks.map((item) =>
+          item.id === leak.id ? leak : item
+        );
+      } else {
+        serverLeaks = [leak, ...serverLeaks];
+      }
+
+      serverVersion += 1;
+      serverUpdatedAt = new Date().toISOString();
+      broadcastLeakEvent({
+        action: 'upsert',
+        version: serverVersion,
+        leak,
+        sourceClientId,
+        reason,
+        silent,
+        timestamp: serverUpdatedAt,
+      });
+      res.json({ok: true, version: serverVersion});
+      return;
+    }
+
+    if (action === 'delete') {
+      const authHeader = req.headers.authorization || '';
+      const token = authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7).trim()
+        : '';
+      const verified = token ? verifySessionToken(token) : null;
+      if (!verified) {
+        res.status(401).json({ok: false, error: 'Unauthorized delete'});
+        return;
+      }
+
+      const id = typeof body?.id === 'string' ? body.id.trim() : '';
+      if (!id) {
+        res.status(400).json({ok: false, error: 'Invalid leak id'});
+        return;
+      }
+
+      serverLeaks = serverLeaks.filter((item) => item.id !== id);
+      serverVersion += 1;
+      serverUpdatedAt = new Date().toISOString();
+      broadcastLeakEvent({
+        action: 'delete',
+        version: serverVersion,
+        id,
+        sourceClientId,
+        reason,
+        silent,
+        timestamp: serverUpdatedAt,
+      });
+      res.json({ok: true, version: serverVersion});
+      return;
+    }
+
+    if (action === 'replace') {
+      if (!Array.isArray(body?.leaks)) {
+        res.status(400).json({ok: false, error: 'Invalid leaks list'});
+        return;
+      }
+      serverLeaks = body.leaks.filter(
+        (item): item is ServerLeakRecord =>
+          Boolean(item) &&
+          typeof item === 'object' &&
+          typeof (item as ServerLeakRecord).id === 'string'
+      );
+      serverVersion += 1;
+      serverUpdatedAt = new Date().toISOString();
+      broadcastLeakEvent({
+        action: 'replace',
+        version: serverVersion,
+        leaks: serverLeaks,
+        sourceClientId,
+        reason,
+        silent,
+        timestamp: serverUpdatedAt,
+      });
+      res.json({ok: true, version: serverVersion});
+      return;
+    }
+
+    res.status(400).json({ok: false, error: 'Unsupported action'});
+  });
 
   app.post('/api/auth/login', (req: Request, res: Response) => {
     const body = req.body as {username?: unknown; password?: unknown};

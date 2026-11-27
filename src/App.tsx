@@ -56,6 +56,12 @@ import {
   saveAppsScriptUrl,
   syncLeaksViaAppsScript,
 } from './utils/appsScript';
+import {
+  fetchServerLeaks,
+  publishRealtimeMutation,
+  RealtimeMutationPayload,
+  subscribeRealtimeSync,
+} from './utils/realtimeSync';
 import {DashboardSummarySection} from './components/DashboardSummarySection';
 import {LeakMapWorkspace} from './components/LeakMapWorkspace';
 import {LeakDrawer} from './components/LeakDrawer';
@@ -186,6 +192,7 @@ export default function App() {
 
   const mapSectionRef = useRef<HTMLDivElement>(null);
   const leaksRef = useRef<LeakPoint[]>([]);
+  const syncVersionRef = useRef<number>(0);
   useEffect(() => {
     leaksRef.current = leaks;
   }, [leaks]);
@@ -232,25 +239,106 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Load persisted leaks & auto-pull from Apps Script if configured
+  // Subscribe to real-time updates from all open web pages/tabs/devices
+  useEffect(() => {
+    const applyRemoteSync = (payload: RealtimeMutationPayload) => {
+      if (typeof payload.version === 'number' && payload.version > 0) {
+        if (payload.version <= syncVersionRef.current) return;
+        syncVersionRef.current = payload.version;
+      }
+
+      if (payload.action === 'upsert' && payload.leak) {
+        const incoming = payload.leak;
+        setLeaks((prev) => {
+          const exists = prev.some((x) => x.id === incoming.id);
+          const next = exists
+            ? prev.map((x) => (x.id === incoming.id ? incoming : x))
+            : [incoming, ...prev];
+          leaksRef.current = next;
+          return next;
+        });
+        void upsertLeak(incoming);
+      } else if (payload.action === 'delete' && payload.id) {
+        const deletedId = payload.id;
+        setLeaks((prev) => {
+          const next = prev.filter((x) => x.id !== deletedId);
+          leaksRef.current = next;
+          return next;
+        });
+        setSelectedId((prev) => (prev === deletedId ? null : prev));
+        void deleteLeakById(deletedId);
+      } else if (
+        payload.action === 'replace' &&
+        Array.isArray(payload.leaks)
+      ) {
+        const nextList = payload.leaks;
+        leaksRef.current = nextList;
+        setLeaks(nextList);
+        void saveAllLeaks(nextList);
+      }
+
+      if (!payload.silent && payload.reason) {
+        setSheetToast({
+          type: 'success',
+          text: `อัปเดตข้อมูลล่าสุดทันที: ${payload.reason}`,
+        });
+        setTimeout(() => setSheetToast(null), 3500);
+      }
+    };
+
+    return subscribeRealtimeSync({
+      getLocalVersion: () => syncVersionRef.current,
+      onSyncEvent: applyRemoteSync,
+    });
+  }, []);
+
+  // Load persisted leaks, prefer authoritative live server state if already hydrated, & pull from Apps Script
   useEffect(() => {
     let active = true;
     loadLeaks().then(async (items) => {
       if (!active) return;
       setLeaks(items);
+      leaksRef.current = items;
+
+      const srv = await fetchServerLeaks();
+      if (!active) return;
+      if (srv.ok && srv.version > 0 && srv.leaks.length > 0) {
+        syncVersionRef.current = srv.version;
+        leaksRef.current = srv.leaks;
+        setLeaks(srv.leaks);
+        setFitBoundsSeq((s) => s + 1);
+        await saveAllLeaks(srv.leaks);
+      }
 
       const initialScriptUrl = getSavedAppsScriptUrl();
       if (isValidAppsScriptUrl(initialScriptUrl)) {
         setIsAutoConnecting(true);
         try {
-          const res = await fetchLeaksViaAppsScript(initialScriptUrl, items);
+          const baseItems =
+            srv.ok && srv.version > 0 && srv.leaks.length > 0
+              ? srv.leaks
+              : items;
+          const res = await fetchLeaksViaAppsScript(
+            initialScriptUrl,
+            baseItems
+          );
           if (!active) return;
           setAppsScriptInfo(res.info);
-          if (res.leaks.length > 0) {
+
+          // If server wasn't seeded yet, hydrate from Apps Script and seed server for all clients
+          if (srv.version === 0 && res.leaks.length > 0) {
             await saveAllLeaks(res.leaks);
             if (!active) return;
+            leaksRef.current = res.leaks;
             setLeaks(res.leaks);
             setFitBoundsSeq((s) => s + 1);
+            const ver = await publishRealtimeMutation({
+              action: 'seed_if_empty',
+              leaks: res.leaks,
+              reason: 'โหลดข้อมูลจาก Google Sheet',
+              silent: true,
+            });
+            if (ver) syncVersionRef.current = ver;
           }
         } catch (err) {
           if (!active) return;
@@ -353,7 +441,15 @@ export default function App() {
         const parsed = sheetRowsToLeaks(values, leaksRef.current);
         if (parsed.length > 0) {
           await saveAllLeaks(parsed);
+          leaksRef.current = parsed;
           setLeaks(parsed);
+          const ver = await publishRealtimeMutation({
+            action: 'replace',
+            leaks: parsed,
+            reason: `ซิงค์ข้อมูลจาก Google Sheet "${meta.title}"`,
+            silent: true,
+          });
+          if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
           setSheetToast({
             type: 'success',
             text: `เชื่อมต่อ Google Drive และไฟล์ "${meta.title}" อัตโนมัติแล้ว (โหลด ${parsed.length} รายการ)`,
@@ -411,7 +507,15 @@ export default function App() {
         workingLeaks = uploadRes.updatedLeaks;
         uploadedCount = uploadRes.uploadedCount;
         await saveAllLeaks(workingLeaks);
+        leaksRef.current = workingLeaks;
         setLeaks(workingLeaks);
+        const ver = await publishRealtimeMutation({
+          action: 'replace',
+          leaks: workingLeaks,
+          reason: pendingSheetSync.reason,
+          silent: true,
+        });
+        if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
       }
 
       if (connectedSheet && !pendingSheetSync.driveOnly) {
@@ -459,16 +563,44 @@ export default function App() {
       setSheetToast(null);
       try {
         const res = await syncLeaksViaAppsScript(appsScriptUrl, targetLeaks);
-        await saveAllLeaks(res.updatedLeaks);
-        setLeaks(res.updatedLeaks);
+
+        // Preserve any concurrent real-time updates while attaching uploaded Drive links
+        const drivePhotoByLeakId = new Map(
+          res.updatedLeaks.map((item) => [item.id, item.photos])
+        );
+        const mergedLeaks = leaksRef.current.map((current) => {
+          const syncedPhotos = drivePhotoByLeakId.get(current.id);
+          if (!syncedPhotos) return current;
+          const nextPhotos = current.photos.map((p) => {
+            if (p.driveFileId && p.driveUrl) return p;
+            const match = syncedPhotos.find((sp) => sp.id === p.id);
+            return match || p;
+          });
+          return {...current, photos: nextPhotos};
+        });
+
+        await saveAllLeaks(mergedLeaks);
+        leaksRef.current = mergedLeaks;
+        setLeaks(mergedLeaks);
         setAppsScriptInfo(res.info);
+
+        if (res.uploadedCount > 0) {
+          const ver = await publishRealtimeMutation({
+            action: 'replace',
+            leaks: mergedLeaks,
+            reason,
+            silent: true,
+          });
+          if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
+        }
+
         setSheetToast({
           type: 'success',
           text: `${reason}: ${
             res.uploadedCount > 0
               ? `อัปโหลดรูป ${res.uploadedCount} ภาพลง Drive และ`
               : ''
-          }ซิงค์ข้อมูล ${res.updatedLeaks.length} รายการลง Google Sheet "${res.info.sheetTitle}" อัตโนมัติแล้ว`,
+          }ซิงค์ข้อมูล ${mergedLeaks.length} รายการลง Google Sheet "${res.info.sheetTitle}" อัตโนมัติแล้ว`,
         });
         setTimeout(() => setSheetToast(null), 5000);
       } catch (err) {
@@ -563,6 +695,17 @@ export default function App() {
 
   const refreshSheetSilently = useCallback(async () => {
     try {
+      const srv = await fetchServerLeaks();
+      if (srv.ok && srv.version > syncVersionRef.current && srv.leaks.length > 0) {
+        syncVersionRef.current = srv.version;
+        leaksRef.current = srv.leaks;
+        setLeaks(srv.leaks);
+        await saveAllLeaks(srv.leaks);
+        return;
+      }
+      if (srv.ok && srv.version > 0) {
+        return;
+      }
       if (isValidAppsScriptUrl(appsScriptUrl)) {
         const res = await fetchLeaksViaAppsScript(
           appsScriptUrl,
@@ -571,6 +714,7 @@ export default function App() {
         setAppsScriptInfo(res.info);
         if (res.leaks.length > 0) {
           await saveAllLeaks(res.leaks);
+          leaksRef.current = res.leaks;
           setLeaks(res.leaks);
         }
         return;
@@ -584,6 +728,7 @@ export default function App() {
         const parsed = sheetRowsToLeaks(values, leaksRef.current);
         if (parsed.length > 0) {
           await saveAllLeaks(parsed);
+          leaksRef.current = parsed;
           setLeaks(parsed);
         }
       }
@@ -634,10 +779,12 @@ export default function App() {
   const handleSaveLeak = useCallback(
     async (saved: LeakPoint) => {
       await upsertLeak(saved);
-      const exists = leaks.some((x) => x.id === saved.id);
+      const base = leaksRef.current;
+      const exists = base.some((x) => x.id === saved.id);
       const nextLeaks = exists
-        ? leaks.map((x) => (x.id === saved.id ? saved : x))
-        : [saved, ...leaks];
+        ? base.map((x) => (x.id === saved.id ? saved : x))
+        : [saved, ...base];
+      leaksRef.current = nextLeaks;
       setLeaks(nextLeaks);
       setDrawerOpen(false);
       setEditingLeak(null);
@@ -664,6 +811,14 @@ export default function App() {
         ? `แก้ไขรายการ ${saved.dma} · NO.${saved.no}`
         : `เพิ่มรายการใหม่ ${saved.dma} · NO.${saved.no}`;
 
+      void publishRealtimeMutation({
+        action: 'upsert',
+        leak: saved,
+        reason,
+      }).then((ver) => {
+        if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
+      });
+
       if (isValidAppsScriptUrl(appsScriptUrl)) {
         void runAppsScriptSync(nextLeaks, reason);
         return;
@@ -687,7 +842,6 @@ export default function App() {
       }
     },
     [
-      leaks,
       isAdmin,
       panToLocation,
       appsScriptUrl,
@@ -700,28 +854,43 @@ export default function App() {
   const handleDeleteLeak = useCallback(
     async (id: string) => {
       if (!isAdmin) return;
+      const target = leaksRef.current.find((x) => x.id === id);
       await deleteLeakById(id);
-      const nextLeaks = leaks.filter((x) => x.id !== id);
+      const nextLeaks = leaksRef.current.filter((x) => x.id !== id);
+      leaksRef.current = nextLeaks;
       setLeaks(nextLeaks);
       setSelectedId((prev) => (prev === id ? null : prev));
       setDrawerOpen(false);
       setEditingLeak(null);
 
+      const reason = target
+        ? `ลบรายการ ${target.dma} · NO.${target.no}`
+        : 'ลบรายการจุดแตกรั่ว';
+
+      void publishRealtimeMutation({
+        action: 'delete',
+        id,
+        reason,
+        authToken: adminToken,
+      }).then((ver) => {
+        if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
+      });
+
       if (isValidAppsScriptUrl(appsScriptUrl)) {
-        void runAppsScriptSync(nextLeaks, 'ลบรายการจุดแตกรั่ว');
+        void runAppsScriptSync(nextLeaks, reason);
         return;
       }
 
       if (connectedSheet && accessToken) {
         setPendingSheetSync({
           leaksSnapshot: nextLeaks,
-          reason: 'ลบรายการจุดแตกรั่ว',
+          reason,
         });
       }
     },
     [
       isAdmin,
-      leaks,
+      adminToken,
       appsScriptUrl,
       runAppsScriptSync,
       connectedSheet,
@@ -731,7 +900,7 @@ export default function App() {
 
   const handleUpdatePosition = useCallback(
     async (id: string, lat: number, lng: number) => {
-      const target = leaks.find((x) => x.id === id);
+      const target = leaksRef.current.find((x) => x.id === id);
       if (!target) return;
       const updated: LeakPoint = {
         ...target,
@@ -740,10 +909,21 @@ export default function App() {
         updatedAt: new Date().toISOString(),
       };
       await upsertLeak(updated);
-      const nextLeaks = leaks.map((x) => (x.id === id ? updated : x));
+      const nextLeaks = leaksRef.current.map((x) =>
+        x.id === id ? updated : x
+      );
+      leaksRef.current = nextLeaks;
       setLeaks(nextLeaks);
 
       const reason = `ย้ายพิกัดจุดรั่ว ${updated.dma} · NO.${updated.no}`;
+      void publishRealtimeMutation({
+        action: 'upsert',
+        leak: updated,
+        reason,
+      }).then((ver) => {
+        if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
+      });
+
       if (isValidAppsScriptUrl(appsScriptUrl)) {
         void runAppsScriptSync(nextLeaks, reason);
         return;
@@ -758,7 +938,6 @@ export default function App() {
     },
     [
       isAdmin,
-      leaks,
       appsScriptUrl,
       runAppsScriptSync,
       connectedSheet,
@@ -851,12 +1030,26 @@ export default function App() {
 
   const handleImportFromSheet = useCallback(async (loaded: LeakPoint[]) => {
     await saveAllLeaks(loaded);
+    leaksRef.current = loaded;
     setLeaks(loaded);
+    const ver = await publishRealtimeMutation({
+      action: 'replace',
+      leaks: loaded,
+      reason: 'นำเข้าข้อมูลจาก Google Sheet',
+    });
+    if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
   }, []);
 
   const handleLeaksUpdated = useCallback(async (updated: LeakPoint[]) => {
     await saveAllLeaks(updated);
+    leaksRef.current = updated;
     setLeaks(updated);
+    const ver = await publishRealtimeMutation({
+      action: 'replace',
+      leaks: updated,
+      reason: 'อัปเดตข้อมูลและภาพถ่ายจาก Google Sheet',
+    });
+    if (ver) syncVersionRef.current = Math.max(syncVersionRef.current, ver);
   }, []);
 
   const pendingSyncPhotoCount = useMemo(() => {
