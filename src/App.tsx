@@ -1,5 +1,4 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {APIProvider} from '@vis.gl/react-google-maps';
 import {User} from 'firebase/auth';
 import {
   CloudUpload,
@@ -68,10 +67,6 @@ import {AdminLoginModal} from './components/AdminLoginModal';
 import {AppTheme, HeaderQuickControls} from './components/HeaderQuickControls';
 import {LandingPage} from './components/LandingPage';
 
-const INITIAL_MAPS_API_KEY = (
-  import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
-).trim();
-const MAP_LIBRARIES: ('marker')[] = ['marker'];
 const SHEET_PREF_KEY = 'hydropin_sheet_pref_v1';
 const THEME_PREF_KEY = 'hydropin_theme_v1';
 const APP_LOGO_SRC = '/assets/aistudio/_________________________2e00b14d.png';
@@ -80,12 +75,6 @@ type ActiveView = 'map' | 'table';
 
 export default function App() {
   const [leaks, setLeaks] = useState<LeakPoint[]>([]);
-  const [quotaExceeded, setQuotaExceeded] = useState(false);
-  const [mapsApiKey, setMapsApiKey] = useState<string>(INITIAL_MAPS_API_KEY);
-  const [mapsConfigReady, setMapsConfigReady] = useState<boolean>(
-    Boolean(INITIAL_MAPS_API_KEY)
-  );
-  const [mapsLoadError, setMapsLoadError] = useState<string | null>(null);
 
   // Pre-entry landing page & Day/Night theme
   const [showLanding, setShowLanding] = useState(true);
@@ -227,37 +216,6 @@ export default function App() {
       if (sheetsOpen) setSheetsOpen(false);
     }
   }, [isAdmin, activeView, severityFilter, reportOpen, sheetsOpen]);
-
-  // Runtime fallback for Maps API key when build-time Vite env is absent
-  useEffect(() => {
-    if (INITIAL_MAPS_API_KEY) return;
-    let active = true;
-    fetch('/api/maps-config', {cache: 'no-store'})
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: {apiKey?: unknown} | null) => {
-        if (!active) return;
-        if (data && typeof data.apiKey === 'string' && data.apiKey.trim()) {
-          setMapsApiKey(data.apiKey.trim());
-        }
-      })
-      .catch(() => {
-        // Fallback card handles missing key cleanly
-      })
-      .finally(() => {
-        if (active) setMapsConfigReady(true);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // Quota exceeded listener
-  useEffect(() => {
-    const onQuotaExceeded = () => setQuotaExceeded(true);
-    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
-    return () =>
-      window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
-  }, []);
 
   // Firebase Auth listener for Google Workspace OAuth
   useEffect(() => {
@@ -917,26 +875,8 @@ export default function App() {
     [roleScopedLeaks]
   );
 
-  if (!mapsConfigReady) {
-    return (
-      <div className="min-h-dvh flex items-center justify-center bg-[#F0F5FA] dark:bg-slate-950 text-xs text-slate-500 dark:text-slate-400">
-        กำลังเตรียมระบบแผนที่...
-      </div>
-    );
-  }
-
   return (
-    <APIProvider
-      apiKey={mapsApiKey}
-      language="th"
-      region="TH"
-      libraries={MAP_LIBRARIES}
-      onError={(err) =>
-        setMapsLoadError(
-          err instanceof Error ? err.message : String(err || 'load_failed')
-        )
-      }
-    >
+    <>
       {showLanding ? (
         <LandingPage
           theme={theme}
@@ -954,24 +894,6 @@ export default function App() {
         />
       ) : (
           <div className="min-h-dvh flex flex-col bg-[#F0F5FA] dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-x-hidden">
-          {/* Quota Defense Banner */}
-          {quotaExceeded && (
-            <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
-              <span>
-                Google Maps Platform quota reached. If you are the app owner,
-                visit{' '}
-                <a
-                  href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline font-semibold text-amber-950 hover:text-amber-800"
-                >
-                  maps developer site
-                </a>{' '}
-                for instructions to update your account.
-              </span>
-            </div>
-          )}
 
           {/* Top Bar */}
           <header className="h-14 md:h-16 bg-gradient-to-r from-[#0A4DA2] via-[#1267C9] to-[#1A7FE2] dark:from-[#0B1D3A] dark:via-[#0F2A54] dark:to-[#13386E] text-white px-2.5 sm:px-6 flex items-center justify-between gap-1.5 sm:gap-2 md:gap-4 sticky top-0 z-30 shrink-0 shadow-sm">
@@ -1347,8 +1269,6 @@ export default function App() {
                       drawerOpen && pickedCoords ? pickedCoords : null
                     }
                     theme={theme}
-                    hasApiKey={Boolean(mapsApiKey)}
-                    mapsError={mapsLoadError}
                     onSelectLeak={setSelectedId}
                     onPickMapLocation={handlePickMapLocation}
                     onStartPickNew={handleStartPickNew}
@@ -1495,6 +1415,6 @@ export default function App() {
           setShowLanding(false);
         }}
       />
-    </APIProvider>
+    </>
   );
 }
