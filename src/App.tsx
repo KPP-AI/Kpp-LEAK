@@ -250,6 +250,7 @@ export default function App() {
             await saveAllLeaks(res.leaks);
             if (!active) return;
             setLeaks(res.leaks);
+            setFitBoundsSeq((s) => s + 1);
           }
         } catch (err) {
           if (!active) return;
@@ -1118,16 +1119,52 @@ export default function App() {
                 {isAdmin && (
                   <div className="hidden md:flex items-center gap-2.5 shrink-0 flex-wrap">
                     {isValidAppsScriptUrl(appsScriptUrl) ? (
-                      <a
-                        href={DEFAULT_DRIVE_FOLDER_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-medium transition-colors whitespace-nowrap"
-                      >
-                        <HardDrive className="w-3.5 h-3.5" />
-                        <span>Drive รูปภาพ</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <a
+                          href={
+                            appsScriptInfo?.folderId
+                              ? `https://drive.google.com/drive/folders/${appsScriptInfo.folderId}`
+                              : DEFAULT_DRIVE_FOLDER_URL
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-medium transition-colors whitespace-nowrap"
+                        >
+                          <HardDrive className="w-3.5 h-3.5" />
+                          <span>Drive รูปภาพ</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                        {appsScriptInfo?.spreadsheetUrl && (
+                          <a
+                            href={appsScriptInfo.spreadsheetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-medium transition-colors whitespace-nowrap"
+                          >
+                            <Table2 className="w-3.5 h-3.5 text-emerald-200" />
+                            <span>Sheet: {appsScriptInfo.sheetTitle}</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSheetsOpen(true)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white text-[#0A4999] text-xs font-semibold hover:bg-sky-50 shadow-xs transition-colors whitespace-nowrap"
+                        >
+                          {isAutoConnecting || isSyncingSheet ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600" />
+                          ) : (
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                          )}
+                          <span>
+                            {isAutoConnecting
+                              ? 'กำลังซิงค์...'
+                              : isSyncingSheet
+                                ? 'กำลังบันทึก...'
+                                : 'Apps Script อัตโนมัติ'}
+                          </span>
+                        </button>
+                      </div>
                     ) : accessToken ? (
                       <div className="flex items-center gap-2 flex-wrap">
                         <a

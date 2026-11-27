@@ -31,8 +31,8 @@ const MAP_TYPE_OPTIONS: {id: MapTypeOption; label: string}[] = [
   {id: 'terrain', label: 'ภูมิประเทศ'},
 ];
 
-const DEFAULT_CENTER: [number, number] = [13.8195, 100.519];
-const DEFAULT_ZOOM = 14;
+const DEFAULT_CENTER: [number, number] = [16.4828, 99.5227];
+const DEFAULT_ZOOM = 11;
 
 function escapeHtml(value: string): string {
   return value

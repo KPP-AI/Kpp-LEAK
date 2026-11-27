@@ -199,6 +199,7 @@ export function sheetRowsToLeaks(
   const now = new Date().toISOString();
   const today = now.slice(0, 10);
   const result: LeakPoint[] = [];
+  const usedMatchedIds = new Set<string>();
 
   for (let i = startRow; i < values.length; i++) {
     const row = values[i] || [];
@@ -223,9 +224,13 @@ export function sheetRowsToLeaks(
 
     const matchedLocal = existingLeaks.find(
       (item) =>
+        !usedMatchedIds.has(item.id) &&
         item.dma.trim().toLowerCase() === dma.toLowerCase() &&
         item.no.trim().toLowerCase() === no.toLowerCase()
     );
+    if (matchedLocal) {
+      usedMatchedIds.add(matchedLocal.id);
+    }
 
     const rawPipeSpec = (row[colPipe] || '').trim();
     const rawPipeType = colPipeType >= 0 ? (row[colPipeType] || '').trim() : '';
@@ -253,7 +258,7 @@ export function sheetRowsToLeaks(
       colLegacyStatus >= 0 ? row[colLegacyStatus] || '' : '';
 
     result.push({
-      id: matchedLocal?.id || `leak-sheet-${i}-${Date.now()}`,
+      id: matchedLocal?.id || `leak-sheet-${i}`,
       dma,
       no,
       reportDate,

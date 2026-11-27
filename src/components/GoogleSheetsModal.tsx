@@ -1,4 +1,4 @@
-import React, {useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 import {User} from 'firebase/auth';
 import {
   Check,
@@ -94,6 +94,15 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
   const [scriptInput, setScriptInput] = useState(appsScriptUrl);
   const [copiedCode, setCopiedCode] = useState(false);
   const [showCode, setShowCode] = useState(!appsScriptUrl);
+
+  useEffect(() => {
+    if (isOpen) {
+      setScriptInput(appsScriptUrl);
+      if (appsScriptUrl) {
+        setShowCode(false);
+      }
+    }
+  }, [isOpen, appsScriptUrl]);
 
   const [urlInput, setUrlInput] = useState(
     connectedSheet?.spreadsheetId || ''

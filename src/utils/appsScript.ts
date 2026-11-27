@@ -3,6 +3,9 @@ import {DEFAULT_DRIVE_FOLDER_ID} from './googleDrive';
 import {sheetRowsToLeaks} from './googleSheets';
 
 export const APPS_SCRIPT_URL_STORAGE_KEY = 'hydropin_apps_script_url_v1';
+const APPS_SCRIPT_DISCONNECTED_SENTINEL = '__DISCONNECTED__';
+export const DEFAULT_APPS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfycbxebyyuYRC502ZfpT5QUqXY5wn--j_dFjGaVKpRN83aXbqprDLTSUeckuidwNqNxVzT1Q/exec';
 export const ENV_APPS_SCRIPT_URL = (
   import.meta.env.VITE_APPS_SCRIPT_URL || ''
 ).trim();
@@ -18,18 +21,22 @@ export interface AppsScriptConnectionInfo {
 export function getSavedAppsScriptUrl(): string {
   try {
     const saved = localStorage.getItem(APPS_SCRIPT_URL_STORAGE_KEY);
+    if (saved === APPS_SCRIPT_DISCONNECTED_SENTINEL) return '';
     if (saved && saved.trim()) return saved.trim();
   } catch {
     // ignore storage errors
   }
-  return ENV_APPS_SCRIPT_URL;
+  return ENV_APPS_SCRIPT_URL || DEFAULT_APPS_SCRIPT_URL;
 }
 
 export function saveAppsScriptUrl(url: string): void {
   const trimmed = url.trim();
   try {
     if (!trimmed) {
-      localStorage.removeItem(APPS_SCRIPT_URL_STORAGE_KEY);
+      localStorage.setItem(
+        APPS_SCRIPT_URL_STORAGE_KEY,
+        APPS_SCRIPT_DISCONNECTED_SENTINEL
+      );
     } else {
       localStorage.setItem(APPS_SCRIPT_URL_STORAGE_KEY, trimmed);
     }
