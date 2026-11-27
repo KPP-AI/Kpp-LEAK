@@ -908,11 +908,18 @@ export default function App() {
               <span className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-white p-0.5 flex items-center justify-center shadow-xs shrink-0">
                 <img
                   src={APP_LOGO_SRC}
-                  alt="โลโก้รายการจุดแตกรั่ว"
+                  alt="โลโก้รายการจุดแตกรั่ว กปภ.สาขากำแพงเพชร"
                   className="w-full h-full object-contain"
                 />
               </span>
-              <span className="truncate">รายการจุดแตกรั่ว</span>
+              <span className="min-w-0 leading-tight">
+                <span className="block sm:inline text-[12px] sm:text-sm lg:text-base font-bold tracking-tight truncate">
+                  รายการจุดแตกรั่ว{' '}
+                </span>
+                <span className="block sm:inline text-[10px] sm:text-sm lg:text-base font-semibold sm:font-bold text-sky-100 sm:text-white tracking-tight truncate">
+                  กปภ.สาขากำแพงเพชร
+                </span>
+              </span>
             </a>
 
             {/* Desktop Navigation */}

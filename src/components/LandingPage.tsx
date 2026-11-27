@@ -65,8 +65,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             />
           </span>
           <div className="min-w-0">
-            <div className="text-[13px] sm:text-base font-bold tracking-tight truncate">
-              รายการจุดแตกรั่ว
+            <div className="text-[12px] sm:text-base font-bold tracking-tight truncate">
+              รายการจุดแตกรั่ว กปภ.สาขากำแพงเพชร
             </div>
             <div className="hidden sm:block text-[11px] text-sky-100/90 truncate">
               ระบบแผนที่ติดตามและซ่อมบำรุงท่อประปา · DMA-01 – DMA-20

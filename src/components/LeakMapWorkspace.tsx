@@ -100,17 +100,13 @@ function buildEsriLayers(
   mode: MapTypeOption,
   theme: 'day' | 'night'
 ): L.TileLayer[] {
-  const tileOpts: L.TileLayerOptions = {
-    maxZoom: 20,
-    maxNativeZoom: 18,
-  };
-
   if (mode === 'satellite') {
     return [
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         {
-          ...tileOpts,
+          maxZoom: 20,
+          maxNativeZoom: 18,
           attribution: 'Tiles &copy; Esri',
         }
       ),
@@ -122,21 +118,24 @@ function buildEsriLayers(
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         {
-          ...tileOpts,
+          maxZoom: 20,
+          maxNativeZoom: 18,
           attribution: 'Tiles &copy; Esri',
         }
       ),
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
         {
-          ...tileOpts,
+          maxZoom: 20,
+          maxNativeZoom: 18,
           attribution: 'Roads &copy; Esri',
         }
       ),
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
         {
-          ...tileOpts,
+          maxZoom: 20,
+          maxNativeZoom: 18,
           attribution: 'Labels &copy; Esri',
         }
       ),
@@ -148,7 +147,8 @@ function buildEsriLayers(
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
         {
-          ...tileOpts,
+          maxZoom: 20,
+          maxNativeZoom: 17,
           attribution: 'Tiles &copy; Esri',
         }
       ),
@@ -161,14 +161,16 @@ function buildEsriLayers(
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         {
-          ...tileOpts,
+          maxZoom: 20,
+          maxNativeZoom: 16,
           attribution: 'Tiles &copy; Esri',
         }
       ),
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
         {
-          ...tileOpts,
+          maxZoom: 20,
+          maxNativeZoom: 16,
           attribution: 'Labels &copy; Esri',
         }
       ),
@@ -179,7 +181,8 @@ function buildEsriLayers(
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
       {
-        ...tileOpts,
+        maxZoom: 20,
+        maxNativeZoom: 17,
         attribution: 'Tiles &copy; Esri',
       }
     ),
@@ -327,6 +330,14 @@ export const LeakMapWorkspace: React.FC<LeakMapWorkspaceProps> = ({
     }
   }, [mapTypeId, theme]);
 
+  // Toggle crosshair cursor & refresh layout during pin-pick mode without mutating React className
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    map.getContainer().classList.toggle('leaflet-crosshair', isPickingLocation);
+    requestAnimationFrame(() => map.invalidateSize({animate: false}));
+  }, [isPickingLocation]);
+
   // Escape key exits fullscreen & resize invalidation
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -420,12 +431,12 @@ export const LeakMapWorkspace: React.FC<LeakMapWorkspaceProps> = ({
   }, [draftPin, searchPin]);
 
   const fitAllVisiblePins = useCallback(
-    (pins: Array<LeakPoint & {lat: number; lng: number}>) => {
+    (pins: Array<LeakPoint & {lat: number; lng: number}>, animate: boolean) => {
       const map = mapInstanceRef.current;
       if (!map || pins.length === 0) return false;
 
       if (pins.length === 1) {
-        map.setView([pins[0].lat, pins[0].lng], 16, {animate: true});
+        map.setView([pins[0].lat, pins[0].lng], 16, {animate});
         return true;
       }
 
@@ -433,7 +444,7 @@ export const LeakMapWorkspace: React.FC<LeakMapWorkspaceProps> = ({
       map.fitBounds(bounds, {
         padding: [56, 56],
         maxZoom: 16,
-        animate: true,
+        animate,
       });
       return true;
     },
@@ -467,7 +478,8 @@ export const LeakMapWorkspace: React.FC<LeakMapWorkspaceProps> = ({
         lastPinSignatureRef.current === '' &&
         pinnedLeaks.length > 0)
     ) {
-      if (fitAllVisiblePins(pinnedLeaks)) {
+      const shouldAnimate = hasInitialFitRef.current && fitRequestedExplicitly;
+      if (fitAllVisiblePins(pinnedLeaks, shouldAnimate)) {
         hasInitialFitRef.current = true;
         lastPinSignatureRef.current = signature;
       }
@@ -481,12 +493,13 @@ export const LeakMapWorkspace: React.FC<LeakMapWorkspaceProps> = ({
     if (focusTarget.seq === lastFocusSeqRef.current && hasInitialFitRef.current) {
       return;
     }
+    const shouldAnimate = hasInitialFitRef.current;
     lastFocusSeqRef.current = focusTarget.seq;
     hasInitialFitRef.current = true;
     map.setView(
       [focusTarget.lat, focusTarget.lng],
       focusTarget.zoom ?? Math.max(map.getZoom(), 16),
-      {animate: true}
+      {animate: shouldAnimate}
     );
   }, [focusTarget]);
 
@@ -652,12 +665,7 @@ export const LeakMapWorkspace: React.FC<LeakMapWorkspaceProps> = ({
 
       {/* Leaflet Map Canvas */}
       <div className="relative flex-1 min-h-[300px] sm:min-h-[340px] w-full bg-slate-100 dark:bg-slate-950">
-        <div
-          ref={mapContainerRef}
-          className={`w-full h-full z-0 ${
-            isPickingLocation ? '[&_.leaflet-container]:!cursor-crosshair' : ''
-          }`}
-        />
+        <div ref={mapContainerRef} className="absolute inset-0 z-0" />
 
         {/* Pin-Pick Mode Banner */}
         {isPickingLocation && (
